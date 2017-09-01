@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 
 import os
+import pickle
 import re
 import shutil
-import psycopg2
-import pickle
 from datetime import date
+
 import boto
+import psycopg2
 from smart_open import smart_open
-from multiprocessing import Pool, cpu_count
 
 active_users = {}
 
@@ -135,13 +135,12 @@ def process_train(train, campaigns, active_users):
 
 
 def process_predict(s3connect, campaigns, active_users, s3bucket, s3key):
-
-    r = []
-    for row in smart_open(s3connect.get_bucket(s3bucket).get_key(s3key, validate=False), mode="r"):
-        odid, _, date_from, date_to, score = row.rstrip().split("\t")
-        score = float(score)
+    for row in smart_open(s3connect.get_bucket(s3bucket).get_key(s3key, validate=False), mode="rb"):
+        odid, _, date_from, date_to, score = row.decode("utf-8").rstrip().split("\t")
         if odid not in active_users:
             continue
+
+        score = float(score)
 
         if score < 0.7 or score == 1:
             continue
