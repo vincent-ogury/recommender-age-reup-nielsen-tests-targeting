@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+[ -d ".cache/`date +%Y-%m-%d`" ] || rm -rf .cache
+
 time python splitter.py
 
 aws s3 rm --recursive s3://ogury-tmp/vincent/recommender-age/results/
