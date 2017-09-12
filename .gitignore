@@ -4,4 +4,9 @@
 .python-version
 .pyc
 __pycache__
-results/
+/results/
+/recommender-user-profile/
+/exports/
+/logs/
+*.rdb
+/test_results/
