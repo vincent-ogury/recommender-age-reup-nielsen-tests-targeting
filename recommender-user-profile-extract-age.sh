@@ -10,3 +10,6 @@ do
     gzcat "$i"/*.gz | perl -nE '/\|\d{4}\r/ && print' > "$i".csv
   fi
 done
+cd ../..
+dt=`date -u +%Y-%m-%d`
+aws s3 sync --del s3://ogury-recommender-prod/recommender-age/predict/xgboost/multi_softprob/dt=${dt}/ recommender-user-profile/predict/
