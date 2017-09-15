@@ -4,11 +4,11 @@ import os
 import pickle
 import re
 import shutil
-import time
 from datetime import date
 
 import psycopg2
 import simplejson
+from smart_open import smart_open
 
 active_users = {}
 
@@ -39,31 +39,26 @@ def cache(name):
     return decorated
 
 
-@cache("campaigns")
 def load_campaigns():
-    cur = conn.cursor()
-    cur.execute(
-        "select campaign_id, campaign_name from campaigns where campaign_id >= 27746 and campaign_name like '%Remi%' and campaign_name not like 'OLD%'")
     result = {}
     split = re.compile("\[(\w+)\] Model(\d) Remi (\d+)(?:\-(\d+)|\+)")
-    for id, name in cur.fetchall():
-        for m in split.finditer(name):
-            country, model, age_from, age_to = m.groups()
-            if age_to is None:
-                age_to = "90"
+    with open("nielsen_tags.json") as f:
+        for row in f:
+            r = simplejson.loads(row)
+            name = r["label"]
+            pixel = r["pixel"]
+            for m in split.finditer(name):
+                country, model, age_from, age_to = m.groups()
+                if age_to is None:
+                    age_to = "90"
 
-            if model == "1":
-                model = "TRAIN"
-            else:
-                model = "PREDICT"
-
-            for age in range(2017 - int(age_to), 2017 - int(age_from) + 1):
-                result["{}_{}_{}".format(model, country, age)] = dict(
-                    file="REMI_{}_{}_{}_{}_{}".format(id, country, age_from, age_to, model),
-                    id=id
-                )
-
-    cur.close()
+                if model == "1":
+                    file = "TRAIN_{}_{}_{}".format(country, age_from, age_to)
+                    for age in range(2017 - int(age_to), 2017 - int(age_from) + 1):
+                        result["TRAIN_{}_{}".format(country, age)] = [file, pixel]
+                else:
+                    file = "PREDICT_{}_{}_{}".format(country, age_from, age_to)
+                    result["PREDICT_{}_{}_{}".format(country, 2017 - int(age_to), 2017 - int(age_from))] = [file, pixel]
 
     return result
 
@@ -84,21 +79,7 @@ def load_active_users():
     return r
 
 
-@cache("pixel")
-def load_pixel():
-    pixel = {}
-    for name in os.listdir("exports"):
-        with open("exports/{}".format(name), "r") as f:
-            r = simplejson.load(f)
-            id = int(r["id"])
-            for d in r["params"]:
-                if d["name"] == "display_trackers":
-                    p = d["value"]
-                    pixel[id] = p.split('"')[1].replace("[", "{").replace("]", "}")
-    return pixel
-
-
-def process(fullname, campaigns, active_users, pixels, languages):
+def process_train(fullname, campaigns, active_users, languages):
     print("Processing {}".format(fullname))
 
     with open(fullname, "r") as f:
@@ -109,25 +90,46 @@ def process(fullname, campaigns, active_users, pixels, languages):
             country = active_users.get(odid)
             k = "TRAIN_{}_{}".format(country, year_of_birth)
             if k in campaigns:
-                f = campaigns[k]
-                pixel = pixels[f['id']]
+                file, pixel = campaigns[k]
                 yield (dict(
                     odid=odid,
+                    file=file,
                     pixel=pixel.format(**{
                         "aaid": odid,
                         "aaid-optout": 0,
                         "timestamp": """`date +%s`"""
                     }),
                     language=languages[country],
-                    **f
                 ))
 
-                # for odid, date_from, date_to in train:
-                #     if odid in active_users:
-                #         k = "TRAIN_{}_{}_{}".format(active_users[odid], 2017 - int(date_to), 2017 - int(date_from))
-                #         if k in campaigns:
-                #             f = campaigns[k]
-                #             yield dict(odid=odid, **f)
+
+def process_predict(fullname, campaigns, active_users, languages):
+    print("Processing {}".format(fullname))
+    for row in smart_open(fullname, mode="rb"):
+        odid, _, date_from, date_to, score = row.decode("utf-8").rstrip().split("\t")
+        if odid not in active_users:
+            continue
+
+        country = active_users.get(odid)
+        score = float(score)
+
+        if score < 0.7 or score == 1:
+            continue
+
+        k = "PREDICT_{}_{}_{}".format(active_users[odid], date_from, date_to)
+
+        if k in campaigns:
+            file, pixel = campaigns[k]
+            yield (dict(
+                odid=odid,
+                file=file,
+                pixel=pixel.format(**{
+                    "aaid": odid,
+                    "aaid-optout": 0,
+                    "timestamp": """`date +%s`"""
+                }),
+                language=languages[country],
+            ))
 
 
 def main():
@@ -135,37 +137,69 @@ def main():
         shutil.rmtree("test_results")
     os.makedirs("test_results")
 
-    p = "recommender-user-profile"
-
     campaigns = load_campaigns()
     active_users = load_active_users()
-    pixel = load_pixel()
-    languages = {"FR":"fr-FR", "IT": "it-IT", "US": "en-US", "GB": "en-GB"}
+    languages = {"FR": "fr-FR", "IT": "it-IT", "US": "en-US", "GB": "en-GB"}
+
+    # TRAIN
 
     dedup = set()
     count = {}
     fhs = {}
+
+    p = "recommender-user-profile/training"
     for name in sorted(os.listdir(p), reverse=True):
         fullname = "{}/{}".format(p, name)
         if os.path.isfile(fullname):
-            for f in process(fullname, campaigns, active_users, pixel, languages):
+            for f in process_train(fullname, campaigns, active_users, languages):
                 if f["odid"] in dedup:
                     continue
                 else:
                     dedup.add(f["odid"])
 
                 if f["file"] not in fhs:
-                    count[f["id"]] = 0
+                    count[f["file"]] = 0
                     fhs[f["file"]] = open("test_results/{}".format(f["file"]), "w")
 
-                if count[f["id"]] == 1500:
+                if count[f["file"]] == 1500:
                     continue
 
-                count[f["id"]] += 1
-                print("""curl -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
-                      .format(
-                    pixel=f["pixel"], language=f["language"]
-                ), file=fhs[f["file"]])
+                count[f["file"]] += 1
+                print(
+                    """curl -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
+                        .format(
+                        pixel=f["pixel"], language=f["language"]
+                    ), file=fhs[f["file"]])
+            for f in fhs.values():
+                f.flush()
+
+    for f in fhs.values():
+        f.close()
+
+    # PREDICT
+    count = {}
+    fhs = {}
+
+    p = "recommender-user-profile/predict"
+    for name in sorted(os.listdir(p), reverse=True):
+        fullname = "{}/{}".format(p, name)
+        if os.path.isfile(fullname):
+            for f in process_predict(fullname, campaigns, active_users, languages):
+                if f["file"] not in fhs:
+                    count[f["file"]] = 0
+                    fhs[f["file"]] = open("test_results/{}".format(f["file"]), "w")
+
+                if count[f["file"]] == 1500:
+                    continue
+
+                count[f["file"]] += 1
+                print(
+                    """curl -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
+                        .format(
+                        pixel=f["pixel"], language=f["language"]
+                    ), file=fhs[f["file"]])
+            for f in fhs.values():
+                f.flush()
 
     for f in fhs.values():
         f.close()
