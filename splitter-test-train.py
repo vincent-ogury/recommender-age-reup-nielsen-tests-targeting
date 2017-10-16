@@ -63,14 +63,14 @@ def load_campaigns():
     return result
 
 
-@cache("active_users")
 def load_active_users():
     cur = conn.cursor()
     cur.execute("""
     select odid, most_frequent_country
     from users 
     where current_date <= last_update::date + 14
-      and most_frequent_country in ('IT', 'FR', 'US', 'GB')
+    --  and most_frequent_country in ('IT', 'FR', 'US', 'GB')
+    and most_frequent_country = 'FR'
     """)
 
     r = dict(cur.fetchall())
@@ -86,6 +86,8 @@ def process_train(fullname, campaigns, active_users, languages):
         for row in f:
             s = row.rstrip().split("|")
             odid = s[0]
+            if odid not in active_users:
+                continue
             year_of_birth = int(s[-1])
             country = active_users.get(odid)
             k = "TRAIN_{}_{}".format(country, year_of_birth)
@@ -166,10 +168,11 @@ def main():
 
                 count[f["file"]] += 1
                 print(
-                    """curl -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
+                    """curl -L -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
                         .format(
                         pixel=f["pixel"], language=f["language"]
                     ), file=fhs[f["file"]])
+                print("sleep 1", file=fhs[f["file"]])
             for f in fhs.values():
                 f.flush()
 
@@ -194,10 +197,11 @@ def main():
 
                 count[f["file"]] += 1
                 print(
-                    """curl -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
+                    """curl -L -s -o /dev/null -A "Mozilla/5.0 (Linux; Android 6.0.1; Redmi Note 3 Build/MOB30Z; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/51.0.2704.106 Mobile Safari/537.36" -H "Accept: image/webp,image/*,*/*;q=0.8" -H "Referer: http://www.litecdn.com/8dd755c/formats/webviews/multiwebviews/percent.html" -H "Accept-Encoding: gzip, deflate" -H "Accept-Language: {language},en-US;q=0.8" -H "X-Requested-With: co.ogury.ogurytestapp.app1" "{pixel}" """
                         .format(
                         pixel=f["pixel"], language=f["language"]
                     ), file=fhs[f["file"]])
+                print("sleep 1", file=fhs[f["file"]])
             for f in fhs.values():
                 f.flush()
 
